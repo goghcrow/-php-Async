@@ -1,0 +1,192 @@
+<?php
+defined('EMPTY_STRING') or define('EMPTY_STRING', strval(NULL));
+
+/**
+ * PHP Async
+ *
+ * 如果服务器在本机，使用vhost，必须配置hosts
+ * 如果使用nginx必须配置：
+ * http {
+ *     fastcgi_ignore_client_abort on; 客户端主动断掉连接之后，Nginx 会等待后端处理完(或者超时)
+ * }
+ */
+class Async
+{
+
+    /**
+     * asyncExecute PHP异步执行任务
+     * @param $url  执行任务的url地址
+     * @param array $post_arr 需要post提交的数据POST
+     * @param array $cookie_arr cookie数据用于登录等的设置
+     * @param callable|NULl $cookie_encoder cookie编码函数，必须是可逆方法，可用于加密
+     * @param int $time_out 超时 默认3s
+     * @param null $errno
+     * @param null $errstr
+     * @return bool
+     * 注意 urlencode
+     */
+    public static function request(string $url, array $post_arr = [], array $cookie_arr = [], callable $cookie_encoder = null, int $time_out = 3, &$errno = null, &$errstr = null) : bool
+    {
+
+        $url = filter_var(filter_var($url, FILTER_SANITIZE_URL), FILTER_VALIDATE_URL);
+        if(!$url) {
+            $errstr = 'url error';
+            return false;
+        }
+
+        $method = 'GET'; //可以通过POST或者GET传递一些参数给要触发的脚本
+        $url_array = parse_url($url); //获取URL信息，以便平凑HTTP HEADER
+        $host   = isset($url_array['host']) ? $url_array['host'] : '';
+        $port   = isset($url_array['port']) ? $url_array['port'] : 80;
+        $path   = isset($url_array['path']) ? $url_array['path'] : '/';
+        $query  = isset($url_array['query']) ? $url_array['query'] : '';
+
+        $fp = @fsockopen($host, $port, $errno, $errstr, $time_out);
+        if (!$fp) {
+            $errstr = 'fsockopen error';
+            return false;
+        }
+
+        $getPath = $path . ($query ? '?' . $query : '');
+        if (!empty($post_arr)) {
+            $method = 'POST';
+        }
+
+        $request        = EMPTY_STRING; // 请求实体
+        $request_header = EMPTY_STRING; // 请求实体header
+        $request_body   = EMPTY_STRING; // 请求实体body
+
+        $request_header = $method . ' ' . $getPath;
+        $request_header .= " HTTP/1.1\r\n";
+        $request_header .= "Host: " . $url_array['host'] . "\r\n"; //HTTP 1.1 Host域不能省略
+
+        ///*以下头信息域可以省略
+        $request_header .= "User-Agent: Mozilla/5.0 (Windows; U; Windows NT 5.1; en-US; rv:1.8.1.13) Gecko/20080311 Firefox/2.0.0.13 \r\n";
+        $request_header .= "Accept: text/xml,application/xml,application/xhtml+xml,text/html;q=0.9,text/plain;q=0.8,image/png,q=0.5 \r\n";
+        $request_header .= "Accept-Language: en-us,en;q=0.5 \r\n";
+        $request_header .= "Accept-Encoding: gzip,deflate \r\n";
+        //*/
+
+        $request_header .= "Connection: Close\r\n";
+
+        if (!empty($cookie_arr)) { // request header
+            if($cookie_encoder === null) {
+                $cookie_encoder = 'base64_encode';
+            }
+            $_cookie = EMPTY_STRING;
+            foreach ($cookie_arr as $k => $v) {
+                $_cookie .= $k . "=" . $v . "; ";
+            }
+            // $_cookie = http_build_cookie($cookie_arr);
+            // $cookie_str = "Cookie: " . $_cookie . " \r\n"; // 不编码传递Cookie
+            // 接收端需要 解码，比如：base64_decode(header(cookie_arr))
+            $cookie_str = "Cookie: " . $cookie_encoder($_cookie) . " \r\n"; // 传递Cookie
+
+            $request_header .= $cookie_str;
+        }
+
+        if (!empty($post_arr)) {  // request header + body
+            $_post = EMPTY_STRING;
+            foreach ($post_arr as $k => $v) {
+                $_post .= $k . '=' . $v. '&';
+            }
+            $request_body = $_post; // post请求 request_body即post数据
+            // $_post = http_build_query($post_arr); // ?
+
+            $post_str = "Content-Type: application/x-www-form-urlencoded\r\n"; // POST数据
+            $post_str .= "Content-Length: " . strlen($request_body) . "\r\n"; // POST数据的长度
+            $request_header .= $post_str;
+
+            // $post_str .= "\r\n";
+            // $post_str .= $_post . "\r\n\r\n"; //传递POST数据
+            // $request_header .= $post_str;
+        }
+
+        $request = $request_header . "\r\n" . $request_body;
+
+        fwrite($fp, $request);
+        fclose($fp);
+        return true;
+    }
+
+    /**
+     * request 的cookie解码，应该与request配合
+     * @param  callable|null $decoder
+     * @return array
+     */
+    public static function cookie_decode(callable $decoder) : array {
+        $_cookie = [];
+
+        $http_cookie = filter_input(INPUT_SERVER, 'HTTP_COOKIE', FILTER_SANITIZE_STRING);
+        if(!$http_cookie) {
+            return $_cookie;
+        }
+
+        $cookie_str = call_user_func($decoder, $http_cookie);
+
+        if(!$cookie_str) {
+            return $_cookie;
+        }
+        $kv_pair = explode(';', trim(trim($cookie_str), ';'));
+        if(!$kv_pair) {
+            return $_cookie;
+        }
+        foreach($kv_pair as $kv) {
+            list($k, $v) = explode('=', trim($kv));
+            $_cookie[$k] = $v;
+            // $_COOKIE[$k] = $v;
+        }
+
+        // $_COOKIE = $_cookie + $_COOKIE;
+        $_COOKIE = $_cookie;
+
+        return $_cookie;
+    }
+
+    /**
+     * 异步调用接受方法必须使用此方法包裹
+     * @param callable $worker
+     * @param callable $cookie_decoder cookie解码，与requestcookie编码配合
+     * @param int $time_out 默认取消脚本超时限制
+     *
+     * 超时时间 测试无效，原因未知
+     */
+    public static function runWith(callable $worker, callable $cookie_decoder = null, $time_out = 0)
+    {
+        if(!is_callable($worker)) {
+            return;
+        }
+
+        $func = function() use($worker) {
+            ob_start();
+            call_user_func($worker);
+
+            // TODO　可以在此处加入回调机制+日志机制
+            // ob_end_clean();
+            $err = ob_get_clean();
+            if($err) {
+                error_log($err);
+            }
+        };
+
+        ignore_user_abort(true);   // 如果客户端断开连接，不会引起脚本abort.
+        // 自此处开始计时 不包括流，数据库，系统调用耗时
+        // 安全模式下失效
+        set_time_limit($time_out); // 取消脚本执行延时上限
+
+        // 解码cookie
+        if($cookie_decoder === null) {
+            $cookie_decoder = 'base64_decode';
+        }
+        if(is_callable($cookie_decoder)) {
+            self::cookie_decode($cookie_decoder);
+        }
+
+        // set_time_limit对register_shutdown_function无效
+        // register_shutdown_function($func); // 任务放在这里, 保证执行
+
+        // 执行异步任务
+        call_user_func($func);
+    }
+
+}
