@@ -1,5 +1,5 @@
 <?php
-defined('EMPTY_STRING') or define('EMPTY_STRING', strval(NULL));
+defined('EMPTY_STRING') or define('EMPTY_STRING', strval(null));
 
 /**
  * PHP Async
@@ -18,7 +18,7 @@ class Async
      * @param $url  执行任务的url地址
      * @param array $post_arr 需要post提交的数据POST
      * @param array $cookie_arr cookie数据用于登录等的设置
-     * @param callable|NULl $cookie_encoder cookie编码函数，必须是可逆方法，可用于加密
+     * @param callable|null $cookie_encoder cookie编码函数，必须是可逆方法，可用于加密
      * @param int $time_out 超时 默认3s
      * @param null $errno
      * @param null $errstr
@@ -70,9 +70,7 @@ class Async
         $request_header .= "Connection: Close\r\n";
 
         if (!empty($cookie_arr)) { // request header
-            if($cookie_encoder === null) {
-                $cookie_encoder = 'base64_encode';
-            }
+            $cookie_encoder = $cookie_encoder ?? 'base64_encode';
             $_cookie = EMPTY_STRING;
             foreach ($cookie_arr as $k => $v) {
                 $_cookie .= $k . "=" . $v . "; ";
@@ -175,9 +173,8 @@ class Async
         set_time_limit($time_out); // 取消脚本执行延时上限
 
         // 解码cookie
-        if($cookie_decoder === null) {
-            $cookie_decoder = 'base64_decode';
-        }
+        $cookie_decoder = $cookie_decoder ?? 'base64_decode';
+
         if(is_callable($cookie_decoder)) {
             self::cookie_decode($cookie_decoder);
         }
